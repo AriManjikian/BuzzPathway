@@ -1,4 +1,4 @@
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import { School } from "@/types/mongo/mongotypes";
 import getAllSubjectsInSchool from "../api-helper/getAllSubjectsInSchool";
 import getEquivalencyForSchool from "../api-helper/getEquivalencyForSchool";
@@ -22,10 +22,10 @@ export default async function mongoImportEquivalency(
       term
     );
 
-    const filter = { _id: school.id };
+    const filter = { _id: new ObjectId(school.id) };
     const update = {
       $set: {
-        _id: school.id,
+        _id: new ObjectId(school.id),
         school: school.name,
         equivalents: equivalents,
         term: term,
@@ -33,7 +33,7 @@ export default async function mongoImportEquivalency(
     };
     const options = { upsert: true };
 
-    collection.updateOne(filter, update, options);
+    await collection.updateOne(filter, update, options);
 
     console.log(
       `Imported ${equivalents.length} equivalencies for ${school.name}`

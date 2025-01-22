@@ -11,7 +11,7 @@ import getEquivalencyForSchool from "@/lib/utils/api-helper/getEquivalencyForSch
 
 export const dynamic = "force-dynamic";
 
-const BATCH_SIZE = 1000;
+const BATCH_SIZE = 100;
 export async function GET() {
   const client = await clientPromise;
   await client.connect();

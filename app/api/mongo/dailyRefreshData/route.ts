@@ -1,6 +1,5 @@
 import clientPromise from "@/lib/mongodb";
 import mongoImportSchools from "@/lib/utils/mongo-helper/mongoImportSchools";
-
 import mongoImportStates from "@/lib/utils/mongo-helper/mongoImportStates";
 import mongoImportEquivalency from "@/lib/utils/mongo-helper/mongoImportEquivalency";
 import mongoDailyRequestLimiter from "@/lib/utils/mongo-helper/mongoMonthlyRequestLimiter";
@@ -12,13 +11,18 @@ import getEquivalencyForSchool from "@/lib/utils/api-helper/getEquivalencyForSch
 export const dynamic = "force-dynamic";
 
 const BATCH_SIZE = 100;
+
 export async function GET() {
   const client = await clientPromise;
   await client.connect();
 
-  const schoolNumber = await mongoDailyRequestLimiter(client);
+  console.log("Connected to MongoDB.");
 
+  const schoolNumber = await mongoDailyRequestLimiter(client);
   if (schoolNumber === null) {
+    console.error(
+      "Route limit exceeded: This route can only be accessed once per month."
+    );
     return new Response(
       JSON.stringify({
         success: false,
@@ -27,31 +31,37 @@ export async function GET() {
     );
   }
 
+  console.log(`Starting batch process from school number ${schoolNumber}.`);
+
   const allSchools = await mongoImportSchools(client, states);
   const indexOfSchoolsChecked = schoolNumber + BATCH_SIZE;
   const batched = allSchools.slice(schoolNumber, indexOfSchoolsChecked);
-  console.log(`Gathering equivalencies for ${batched.length} schools`);
 
-  const equivalenciesForAllSchools = await gatherEquivalencies(batched);
-  bulkImportEquivalencies(client, equivalenciesForAllSchools);
-  /*
-  for (let i = 0; i < allSchools.length; i++) {
-    mongoImportEquivalency(client, allSchools[i]);
-  }*/
+  console.log(`Batch size: ${batched.length}.`);
+
+  try {
+    const equivalenciesForAllSchools = await gatherEquivalencies(batched);
+    console.log(
+      `Equivalencies gathered for ${equivalenciesForAllSchools.length} schools.`
+    );
+    await bulkImportEquivalencies(client, equivalenciesForAllSchools);
+    console.log("Bulk import completed successfully.");
+  } catch (error) {
+    console.error("Error during equivalency gathering or import:", error);
+  }
 
   const accessCollection = client.db("transfer").collection("lastAccessed");
+  const newSchoolNumber =
+    allSchools.length >= indexOfSchoolsChecked ? indexOfSchoolsChecked : 0;
   await accessCollection.updateOne(
     { routeName: "dailyMongoUpdate" },
     {
-      $set: {
-        schoolNumber:
-          allSchools.length >= indexOfSchoolsChecked
-            ? indexOfSchoolsChecked
-            : 0,
-      },
+      $set: { schoolNumber: newSchoolNumber },
     },
     { upsert: true }
   );
+
+  console.log(`Updated last accessed school number to ${newSchoolNumber}.`);
 
   return new Response(JSON.stringify({ success: true }));
 }
@@ -62,10 +72,16 @@ async function gatherEquivalencies(schools: School[]) {
   );
 
   const equivalenciesForAllSchools = await Promise.all(operationsPromises);
-  return equivalenciesForAllSchools.filter(Boolean); // this removes any null values
+  console.log(
+    `Filtered null values. Total successful equivalencies: ${
+      equivalenciesForAllSchools.filter(Boolean).length
+    }.`
+  );
+  return equivalenciesForAllSchools.filter(Boolean);
 }
 
 async function gatherEquivalencyForSchool(school: School) {
+  console.log(`Processing school: ${school.name} (${school.id}).`);
   try {
     const schoolData = await getAllSubjectsInSchool(school.state, school.id);
     const term = schoolData.terms[0].id;
@@ -78,7 +94,7 @@ async function gatherEquivalencyForSchool(school: School) {
     );
 
     console.log(
-      `Gathered ${equivalents.length} equivalencies for ${school.name}`
+      `Gathered ${equivalents.length} equivalencies for ${school.name}.`
     );
 
     return {
@@ -96,16 +112,26 @@ async function gatherEquivalencyForSchool(school: School) {
       },
     };
   } catch (error) {
-    console.log(error);
-    // Handle the error, e.g., retry mechanism or logging
-    return null; // or a default value, or you could re-throw the error depending on your use case
+    console.error(
+      `Error gathering equivalency for school: ${school.name}`,
+      error
+    );
+    return null;
   }
 }
 
 async function bulkImportEquivalencies(client: MongoClient, operations: any[]) {
   const db = client.db("transfer");
   const collection = db.collection("equivalents");
-  return collection.bulkWrite(operations);
+  try {
+    const result = await collection.bulkWrite(operations);
+    console.log(
+      `Bulk import successful. Inserted: ${result.insertedCount}, Updated: ${result.modifiedCount}.`
+    );
+  } catch (error) {
+    console.error("Bulk import failed.", error);
+    throw error;
+  }
 }
 
 const states = [
